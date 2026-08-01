@@ -84,7 +84,7 @@ namespace FallingTrees.Content.Projectiles
                 case Phase.Warmup: UpdateWarmup(); break;
                 case Phase.Falling: UpdateFalling(); break;
                 case Phase.Bounce: UpdateBounce(); break;
-                case Phase.Landed: UpdateLanded(); break;
+                case Phase.Landed: UpdateLanded(); break; // ИСПРАВЛЕНО: больше не вызывает Projectile.Kill()
             }
 
             if (ChopCooldown > 0f)
@@ -231,7 +231,6 @@ namespace FallingTrees.Content.Projectiles
             CurrentPhase = Phase.Landed;
             PhaseTimer = 0f;
             Projectile.velocity = Vector2.Zero;
-            // Угол (Angle) уже равен restAngle, мы его не меняем. Дерево лежит так, как упало.
         }
 
         private void UpdateLanded()
@@ -249,14 +248,11 @@ namespace FallingTrees.Content.Projectiles
                 Vector2 dir = DirectionVector(Angle);
                 Vector2 toPlayer = player.Center - Projectile.Center;
                 
-                // Проекция игрока на линию ствола
                 float proj = Vector2.Dot(toPlayer, dir);
                 
-                // Если игрок находится вдоль длины ствола (с запасом 30px на торцы)
                 if (proj >= -30f && proj <= heightPixels + 30f)
                 {
                     Vector2 closest = Projectile.Center + dir * MathHelper.Clamp(proj, 0f, heightPixels);
-                    // Если дистанция от игрока до ствола меньше 50 пикселей (радиус замаха)
                     if (Vector2.Distance(player.Center, closest) < 50f)
                     {
                         ChopDownedTree(player);
@@ -301,7 +297,8 @@ namespace FallingTrees.Content.Projectiles
             if (treeTexture == null)
                 return false;
             
-            // Рисуем даже в фазе Landed, чтобы дерево было видно, когда лежит
+            // ИСПРАВЛЕНО: убрано условие CurrentPhase == Phase.Landed, чтобы дерево рисовалось, когда лежит
+            
             Vector2 drawPos = Projectile.Center - Main.screenPosition;
             Vector2 origin = new Vector2(pivotX, pivotY);
             float rotation = Angle * Direction;
