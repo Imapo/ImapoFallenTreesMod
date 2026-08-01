@@ -1,0 +1,6 @@
+Chopped trees now topple over with real physics instead of vanishing into a pile of logs.
+Falling trunks can hit and damage players/NPCs, then remain as a physical obstacle on the ground
+that can be chopped up for wood.
+
+MVP / прототип: работает для обычных лесных деревьев (TileID.Trees). Пальмы, грибные деревья,
+деревья джунглей и т.п. можно добавить по аналогии — см. комментарии в коде.

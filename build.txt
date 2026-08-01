@@ -1,0 +1,10 @@
+displayName = Falling Trees
+author = You
+version = 3.1
+homepage =
+modReferences =
+weakReferences =
+sortAfter =
+sortBefore =
+buildIgnore = *.csproj, *.user, obj/*, bin/*, .vs/*
+side = Both
