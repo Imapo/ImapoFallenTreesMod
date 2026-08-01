@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Terraria;
@@ -12,60 +13,62 @@ namespace FallingTrees.Common.GlobalTiles
 {
     public class TreeChopGlobalTile : GlobalTile
     {
-        private static Point16 lastHandledTile = new Point16(-1, -1);
+        private static Point16 lastHandledTree = new Point16(-1, -1);
         private static uint lastHandledFrame;
+        private static bool isProcessing = false;
 
-        public override bool CanKillTile(int i, int j, int type, ref bool blockDamaged)
+        public override void KillTile(int i, int j, int type, ref bool fail, ref bool effectOnly, ref bool noItem)
         {
             if (type != TileID.Trees)
-                return true;
+                return;
 
-            Tile tile = Main.tile[i, j];
-            if (!tile.HasTile)
-                return true;
+            if (fail || effectOnly)
+                return;
 
-            // === КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ===
-            // Если это не реальный замах топором, возвращаем true, чтобы ваниль 
-            // могла обработать наведение курсора (подсветку), но не ломала дерево.
-            if (!IsRealAxeChop(i, j))
-                return true;
+            // На выделенном сервере нет графического устройства, пропускаем.
+            if (Main.dedServ)
+                return;
 
-            if (lastHandledTile.X == i && lastHandledTile.Y == j && lastHandledFrame == Main.GameUpdateCount)
-                return true;
+            if (isProcessing)
+                return;
+
+            // === КЛЮЧЕВАЯ ПРОВЕРКА ===
+            // Основание дерева ВСЕГДА стоит на твёрдом блоке (земля, трава, снег).
+            // Если под тайлом воздух (тайл уже удалён ванилью) или не-твёрдый блок —
+            // это НЕ основание, а промежуточный/верхний тайл ствола. Пропускаем.
+            if (j + 1 >= Main.maxTilesY)
+                return;
+
+            Tile below = Main.tile[i, j + 1];
+            if (!below.HasTile || !Main.tileSolid[below.TileType])
+                return;
+
+            // Дополнительная защита: не обрабатываем одно и то же дерево дважды за тик
+            if (lastHandledTree.X == i && lastHandledTree.Y == j && lastHandledFrame == Main.GameUpdateCount)
+                return;
 
             List<TrunkFrameData> frames = CaptureTrunkFrames(i, j);
             if (frames.Count == 0)
-                return true;
+                return;
 
-            lastHandledTile = new Point16((short)i, (short)j);
+            lastHandledTree = new Point16((short)i, (short)j);
             lastHandledFrame = Main.GameUpdateCount;
 
-            SpawnFallingTree(i, j, frames);
-            RemoveTrunk(i, j, frames.Count);
-
-            return false; // Отменяем ванильное разрушение, мы всё сделали сами
-        }
-
-        private bool IsRealAxeChop(int i, int j)
-        {
-            Player player = Main.LocalPlayer;
-            if (player == null || !player.active || player.dead)
-                return false;
-
-            Item held = player.HeldItem;
-            if (held == null || held.axe <= 0)
-                return false;
-
-            // itemAnimation > 0 означает, что игрок находится в анимации замаха.
-            // При простом наведении смарт-курсора itemAnimation всегда равен 0.
-            if (player.itemAnimation <= 0)
-                return false;
-
-            Vector2 tileCenter = new Vector2(i * 16f + 8f, j * 16f + 8f);
-            if (Vector2.Distance(player.Center, tileCenter) > 80f) // ~5 тайлов
-                return false;
-
-            return true;
+            isProcessing = true;
+            try
+            {
+                SpawnFallingTree(i, j, frames);
+            }
+            catch (ThreadStateException)
+            {
+                // Если мы в фоновом потоке (например, при генерации мира), 
+                // создание RenderTarget2D вызовет эту ошибку. 
+                // Мы её перехватываем и игнорируем, позволяя ванили просто удалить дерево.
+            }
+            finally
+            {
+                isProcessing = false;
+            }
         }
 
         private List<TrunkFrameData> CaptureTrunkFrames(int i, int j)
@@ -83,17 +86,6 @@ namespace FallingTrees.Common.GlobalTiles
                 y--;
             }
             return frames;
-        }
-
-        private void RemoveTrunk(int i, int j, int height)
-        {
-            for (int y = j; y > j - height; y--)
-            {
-                if (Main.tile[i, y].HasTile && Main.tile[i, y].TileType == TileID.Trees)
-                {
-                    WorldGen.KillTile(i, y, noItem: true);
-                }
-            }
         }
 
         private void SpawnFallingTree(int i, int j, List<TrunkFrameData> frames)
