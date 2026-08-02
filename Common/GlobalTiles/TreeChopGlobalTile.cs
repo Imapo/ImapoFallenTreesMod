@@ -227,7 +227,7 @@ namespace ImapoFallingTrees.Common.GlobalTiles
         private int ChooseFallDirectionByWind()
         {
             float wind = Main.windSpeedCurrent;
-            const float windDeadZone = 0.02f;
+            const float windDeadZone = 0.5f;
             if (wind > windDeadZone) return 1;
             if (wind < -windDeadZone) return -1;
             return Main.rand.NextBool() ? -1 : 1;
