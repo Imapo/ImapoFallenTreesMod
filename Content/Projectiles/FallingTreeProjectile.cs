@@ -39,9 +39,10 @@ namespace FallingTrees.Content.Projectiles
         private int pivotX, pivotY;
 
         private const int WarmupTicks = 60;
-        private const int FallTicks = 100;
         private const int BounceTicks = 26;
         private const float BounceAmplitude = 0.11f;
+        private const float Gravity = 0.0008f; // Ускорение падения
+        private const float MaxAngle = MathHelper.Pi * 0.9f; // Максимальный угол (почти перевёрнутое)
 
         private readonly HashSet<int> hitPlayers = new HashSet<int>();
         private readonly HashSet<int> hitNPCs = new HashSet<int>();
@@ -84,7 +85,7 @@ namespace FallingTrees.Content.Projectiles
                 case Phase.Warmup: UpdateWarmup(); break;
                 case Phase.Falling: UpdateFalling(); break;
                 case Phase.Bounce: UpdateBounce(); break;
-                case Phase.Landed: UpdateLanded(); break; // ИСПРАВЛЕНО: больше не вызывает Projectile.Kill()
+                case Phase.Landed: UpdateLanded(); break;
             }
 
             if (ChopCooldown > 0f)
@@ -105,7 +106,7 @@ namespace FallingTrees.Content.Projectiles
                 CurrentPhase = Phase.Falling;
                 PhaseTimer = 0f;
                 Angle = 0f;
-                AngularVelocity = 0f;
+                AngularVelocity = 0.001f; // Начальная скорость падения
             }
         }
 
@@ -114,24 +115,60 @@ namespace FallingTrees.Content.Projectiles
         private void UpdateFalling()
         {
             int heightPixels = TreeHeightTiles * 16;
-            PhaseTimer++;
-            float t = MathHelper.Clamp(PhaseTimer / FallTicks, 0f, 1f);
-            float eased = t * t * t;
-            float targetAngle = eased * MathHelper.PiOver2;
+            
+            // Увеличиваем угловую скорость (гравитация)
+            AngularVelocity += Gravity;
+            Angle += AngularVelocity;
 
-            if (WouldTipHitObstacle(targetAngle, heightPixels))
+            // Проверяем столкновение кончика с препятствием
+            if (WouldTipHitObstacle(Angle, heightPixels))
             {
                 StartBounce(Angle);
                 return;
             }
 
-            AngularVelocity = MathHelper.Clamp(3f * t * t, 0f, 1f);
-            Angle = targetAngle;
+            // Проверяем, не упирается ли ствол в землю (для деревьев на земле)
+            if (Angle > MathHelper.PiOver2 && WouldTrunkHitGround(Angle, heightPixels))
+            {
+                StartBounce(Angle);
+                return;
+            }
+
+            // Максимальный угол
+            if (Angle >= MaxAngle)
+            {
+                StartBounce(MaxAngle);
+                return;
+            }
+
+            // Наносим урон и создаём частицы
             DamageEntitiesAlongTrunk(heightPixels);
             SpawnFallingLeaves(heightPixels);
+        }
 
-            if (t >= 1f)
-                StartBounce(MathHelper.PiOver2);
+        /// <summary>
+        /// Проверяет, не упирается ли ствол в землю при угле больше горизонтали.
+        /// Проверяем несколько точек вдоль ствола.
+        /// </summary>
+        private bool WouldTrunkHitGround(float angle, int heightPixels)
+        {
+            const int checkPoints = 5;
+            for (int i = 1; i <= checkPoints; i++)
+            {
+                float dist = heightPixels * (i / (float)(checkPoints + 1));
+                Vector2 point = Projectile.Center + DirectionVector(angle) * dist;
+                
+                int tileX = (int)(point.X / 16f);
+                int tileY = (int)(point.Y / 16f);
+                
+                if (!WorldGen.InWorld(tileX, tileY))
+                    continue;
+                    
+                Tile t = Main.tile[tileX, tileY];
+                if (t.HasTile && Main.tileSolid[t.TileType])
+                    return true;
+            }
+            return false;
         }
 
         private void SpawnFallingLeaves(int heightPixels)
@@ -168,7 +205,7 @@ namespace FallingTrees.Content.Projectiles
 
             if (PhaseTimer >= BounceTicks)
             {
-                Angle = restAngle; // Дерево остаётся под углом, на котором остановилось!
+                Angle = restAngle;
                 LandTree();
             }
         }
@@ -194,7 +231,7 @@ namespace FallingTrees.Content.Projectiles
         private void DamageEntitiesAlongTrunk(int heightPixels)
         {
             const int samples = 6;
-            int damage = (int)MathHelper.Lerp(8, 60, AngularVelocity);
+            int damage = (int)MathHelper.Lerp(8, 60, AngularVelocity * 100f);
             for (int s = 1; s <= samples; s++)
             {
                 float dist = heightPixels * (s / (float)samples);
@@ -235,21 +272,20 @@ namespace FallingTrees.Content.Projectiles
 
         private void UpdateLanded()
         {
-            Projectile.timeLeft = 2; // Бессмертие, пока не срубят
+            Projectile.timeLeft = 2;
 
             Player player = Main.LocalPlayer;
-            if (player == null || !player.active || player.dead)
+            if (player?.active != true || player.dead)
                 return;
 
-            // Проверяем рубку: игрок держит топор и замахивается (itemAnimation > 0)
             if (ChopCooldown <= 0f && player.HeldItem != null && player.HeldItem.axe > 0 && player.itemAnimation > 0)
             {
                 int heightPixels = TreeHeightTiles * 16;
                 Vector2 dir = DirectionVector(Angle);
                 Vector2 toPlayer = player.Center - Projectile.Center;
-                
+
                 float proj = Vector2.Dot(toPlayer, dir);
-                
+
                 if (proj >= -30f && proj <= heightPixels + 30f)
                 {
                     Vector2 closest = Projectile.Center + dir * MathHelper.Clamp(proj, 0f, heightPixels);
@@ -268,7 +304,7 @@ namespace FallingTrees.Content.Projectiles
             Item.NewItem(source, (int)Projectile.Center.X, (int)Projectile.Center.Y, 16, 16, ItemID.Wood, woodAmount);
 
             SoundEngine.PlaySound(SoundID.Dig, Projectile.Center);
-            
+
             for (int n = 0; n < 14; n++)
             {
                 int heightPixels = TreeHeightTiles * 16;
@@ -278,7 +314,7 @@ namespace FallingTrees.Content.Projectiles
                 float maxX = Math.Max(Projectile.Center.X, tip.X) + 16;
                 float minY = Math.Min(Projectile.Center.Y, tip.Y) - 16;
                 float maxY = Math.Max(Projectile.Center.Y, tip.Y) + 16;
-                
+
                 int d = Dust.NewDust(new Vector2(minX, minY), (int)(maxX - minX), (int)(maxY - minY), DustID.WoodFurniture, 0f, 0f, 100, default, 1.1f);
                 Main.dust[d].velocity *= 1.4f;
             }
@@ -296,13 +332,11 @@ namespace FallingTrees.Content.Projectiles
         {
             if (treeTexture == null)
                 return false;
-            
-            // ИСПРАВЛЕНО: убрано условие CurrentPhase == Phase.Landed, чтобы дерево рисовалось, когда лежит
-            
+
             Vector2 drawPos = Projectile.Center - Main.screenPosition;
             Vector2 origin = new Vector2(pivotX, pivotY);
             float rotation = Angle * Direction;
-            
+
             Main.EntitySpriteDraw(
                 treeTexture,
                 drawPos,
