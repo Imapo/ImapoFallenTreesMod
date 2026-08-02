@@ -16,6 +16,7 @@ namespace ImapoFallingTrees.Content.Projectiles
 
         private int TreeHeightTiles => (int)Projectile.ai[0];
         private int Direction => (int)Projectile.ai[1];
+        private int DropItemType => (int)Projectile.ai[2]; // Тип выпадающего предмета (Wood, PalmWood и т.д.)
 
         private Phase CurrentPhase
         {
@@ -45,8 +46,6 @@ namespace ImapoFallingTrees.Content.Projectiles
         private const float MaxAngle = MathHelper.Pi * 0.9f;
         private const int SupportCheckInterval = 30;
 
-        // === МАССИВ ЗВУКОВ ПАДЕНИЯ ДЕРЕВА ===
-        // MaxInstances = 1 предотвращает наложение звуков друг на друга
         private static readonly SoundStyle[] TreeFallSounds = new SoundStyle[]
         {
             new SoundStyle("ImapoFallingTrees/Sounds/TreeFall1") { MaxInstances = 1 },
@@ -56,22 +55,21 @@ namespace ImapoFallingTrees.Content.Projectiles
             new SoundStyle("ImapoFallingTrees/Sounds/TreeFall5") { MaxInstances = 1 }
         };
 
-        // Звук удара о землю при приземлении
         private static readonly SoundStyle TreeImpactSound = new SoundStyle("ImapoFallingTrees/Sounds/TreeImpact") { MaxInstances = 1 };
 
         private readonly HashSet<int> hitPlayers = new HashSet<int>();
         private readonly HashSet<int> hitNPCs = new HashSet<int>();
 
-        // Флаги для предотвращения повторного воспроизведения звука в одной фазе
         private bool fallSoundPlayed = false;
         private bool impactSoundPlayed = false;
 
         public override string Texture => "ImapoFallingTrees/Content/Projectiles/FallingTreeProjectile";
 
-        public void Init(int heightTiles, int direction, Texture2D composite, int pivotXIn, int pivotYIn)
+        public void Init(int heightTiles, int direction, Texture2D composite, int pivotXIn, int pivotYIn, int dropItemType)
         {
             Projectile.ai[0] = heightTiles;
             Projectile.ai[1] = direction;
+            Projectile.ai[2] = dropItemType; // Сохраняем тип дропа
             CurrentPhase = Phase.Warmup;
             PhaseTimer = 0f;
             ChopCooldown = 0f;
@@ -80,8 +78,7 @@ namespace ImapoFallingTrees.Content.Projectiles
             treeTexture = composite;
             pivotX = pivotXIn;
             pivotY = pivotYIn;
-            
-            // Сбрасываем флаги звуков при инициализации
+
             fallSoundPlayed = false;
             impactSoundPlayed = false;
         }
@@ -130,8 +127,6 @@ namespace ImapoFallingTrees.Content.Projectiles
                 PhaseTimer = 0f;
                 Angle = 0f;
                 AngularVelocity = 0.001f;
-
-                // Запуск звука падения ровно в момент начала анимации
                 PlayRandomFallSound();
             }
         }
@@ -141,33 +136,28 @@ namespace ImapoFallingTrees.Content.Projectiles
         private void UpdateFalling()
         {
             int heightPixels = TreeHeightTiles * 16;
-            
-            // Увеличиваем угловую скорость (гравитация)
+
             AngularVelocity += Gravity;
             Angle += AngularVelocity;
 
-            // Проверяем столкновение кончика с препятствием
             if (WouldTipHitObstacle(Angle, heightPixels))
             {
                 StartBounce(Angle);
                 return;
             }
 
-            // Проверяем, не упирается ли ствол в землю (для деревьев на земле)
             if (Angle > MathHelper.PiOver2 && WouldTrunkHitGround(Angle, heightPixels))
             {
                 StartBounce(Angle);
                 return;
             }
 
-            // Максимальный угол
             if (Angle >= MaxAngle)
             {
                 StartBounce(MaxAngle);
                 return;
             }
 
-            // Наносим урон и создаём частицы
             DamageEntitiesAlongTrunk(heightPixels);
             SpawnFallingLeaves(heightPixels);
         }
@@ -179,13 +169,13 @@ namespace ImapoFallingTrees.Content.Projectiles
             {
                 float dist = heightPixels * (i / (float)(checkPoints + 1));
                 Vector2 point = Projectile.Center + DirectionVector(angle) * dist;
-                
+
                 int tileX = (int)(point.X / 16f);
                 int tileY = (int)(point.Y / 16f);
-                
+
                 if (!WorldGen.InWorld(tileX, tileY))
                     continue;
-                    
+
                 Tile t = Main.tile[tileX, tileY];
                 if (t.HasTile && Main.tileSolid[t.TileType])
                     return true;
@@ -211,14 +201,13 @@ namespace ImapoFallingTrees.Content.Projectiles
             restAngle = landedAngle;
             Angle = restAngle;
             Vector2 impactPoint = Projectile.Center + DirectionVector(restAngle) * (TreeHeightTiles * 16);
-            
-            // Запуск звука удара ровно в момент касания земли
+
             if (!impactSoundPlayed)
             {
                 PlayImpactSound();
                 impactSoundPlayed = true;
             }
-            
+
             for (int n = 0; n < 12; n++)
             {
                 int d = Dust.NewDust(impactPoint - new Vector2(12, 12), 24, 24, DustID.WoodFurniture, 0f, -2f);
@@ -255,7 +244,7 @@ namespace ImapoFallingTrees.Content.Projectiles
             if (!WorldGen.InWorld(tileX, tileY)) return true;
             Tile t = Main.tile[tileX, tileY];
             if (!t.HasTile) return false;
-            return Main.tileSolid[t.TileType] || t.TileType == TileID.Trees;
+            return Main.tileSolid[t.TileType] || t.TileType == TileID.Trees || t.TileType == TileID.PalmTree;
         }
 
         private void DamageEntitiesAlongTrunk(int heightPixels)
@@ -309,28 +298,26 @@ namespace ImapoFallingTrees.Content.Projectiles
                 Vector2 point = Projectile.Center + DirectionVector(angle) * dist;
                 int px = (int)(point.X / 16f);
                 int py = (int)(point.Y / 16f);
-                
+
                 if (!WorldGen.InWorld(px, py)) continue;
                 Tile t = Main.tile[px, py];
                 if (!t.HasTile) continue;
-                
-                // Твёрдый блок, другое дерево или ветви (ID 6) — это опора
-                if (Main.tileSolid[t.TileType] || t.TileType == TileID.Trees || t.TileType == 6)
+
+                if (Main.tileSolid[t.TileType] || t.TileType == TileID.Trees || t.TileType == TileID.PalmTree || t.TileType == 6)
                     return true;
             }
-            
-            // Дополнительно проверяем тайл прямо под кончиком дерева
+
             Vector2 tip = Projectile.Center + DirectionVector(angle) * heightPixels;
             int tipX = (int)(tip.X / 16f);
             int tipY = (int)(tip.Y / 16f) + 1;
-            
+
             if (WorldGen.InWorld(tipX, tipY))
             {
                 Tile below = Main.tile[tipX, tipY];
                 if (below.HasTile && Main.tileSolid[below.TileType])
                     return true;
             }
-            
+
             return false;
         }
 
@@ -339,45 +326,35 @@ namespace ImapoFallingTrees.Content.Projectiles
             CurrentPhase = Phase.Falling;
             PhaseTimer = 0f;
             AngularVelocity = 0.001f;
-            Projectile.timeLeft = 3600; // Критически важно: продлеваем жизнь проектайла
+            Projectile.timeLeft = 3600;
 
             hitPlayers.Clear();
             hitNPCs.Clear();
-            
-            // Сбрасываем флаги звуков, чтобы они проигрались снова при возобновлении падения
+
             fallSoundPlayed = false;
             impactSoundPlayed = false;
-            
-            // Запускаем звук падения снова
+
             PlayRandomFallSound();
-            
+
             for (int n = 0; n < 8; n++)
             {
-                Dust.NewDust(Projectile.position, Projectile.width, Projectile.height, 
+                Dust.NewDust(Projectile.position, Projectile.width, Projectile.height,
                     DustID.WoodFurniture, 0f, -1f, 100, default, 1f);
             }
         }
 
-        // === МЕТОДЫ ДЛЯ ВОСПРОИЗВЕДЕНИЯ ЗВУКОВ ===
-
         private void PlayRandomFallSound()
         {
-            if (fallSoundPlayed) return; // Защита от повторного воспроизведения
-            
+            if (fallSoundPlayed) return;
             try
             {
                 int soundIndex = Main.rand.Next(TreeFallSounds.Length);
-                
-                // Регулируем громкость в зависимости от высоты дерева (от 0.5 до 1.0)
                 float volume = MathHelper.Clamp(0.5f + (TreeHeightTiles / 30f), 0.5f, 1.0f);
-                
                 SoundEngine.PlaySound(TreeFallSounds[soundIndex].WithVolumeScale(volume), Projectile.Center);
                 fallSoundPlayed = true;
             }
             catch
             {
-                // Если кастомные файлы не найдены, игра НЕ вылетит и НЕ будет спамить ошибками в консоль.
-                // Просто помечаем, что звук "сыграл", чтобы не пытаться снова.
                 fallSoundPlayed = true;
             }
         }
@@ -386,29 +363,25 @@ namespace ImapoFallingTrees.Content.Projectiles
         {
             try
             {
-                // Громкость удара также зависит от высоты дерева
                 float volume = MathHelper.Clamp(0.6f + (TreeHeightTiles / 25f), 0.6f, 1.0f);
-                
                 SoundEngine.PlaySound(TreeImpactSound.WithVolumeScale(volume), Projectile.Center);
             }
             catch
             {
-                // Безопасный запасной вариант: ванильный звук глухого удара, который работает всегда
                 SoundEngine.PlaySound(SoundID.Item1, Projectile.Center);
             }
         }
 
         private void UpdateLanded()
         {
-            Projectile.timeLeft = 2; // Бессмертие, пока не срубят или не упадёт дальше
+            Projectile.timeLeft = 2;
 
-            // Периодически проверяем, есть ли под стволом опора
             PhaseTimer++;
             if (PhaseTimer >= SupportCheckInterval)
             {
                 PhaseTimer = 0f;
                 int heightPixels = TreeHeightTiles * 16;
-                
+
                 if (!HasSupport(Angle, heightPixels))
                 {
                     ResumeFalling();
@@ -416,7 +389,6 @@ namespace ImapoFallingTrees.Content.Projectiles
                 }
             }
 
-            // Проверка рубки упавшего дерева
             Player player = Main.LocalPlayer;
             if (player?.active != true || player.dead)
                 return;
@@ -442,9 +414,12 @@ namespace ImapoFallingTrees.Content.Projectiles
 
         private void ChopDownedTree(Player player)
         {
-            int woodAmount = TreeHeightTiles;
+            // Используем сохранённый тип дропа (Wood для деревьев, PalmWood для пальм)
+            int dropType = DropItemType > 0 ? DropItemType : ItemID.Wood;
+            int amount = TreeHeightTiles;
+
             var source = new EntitySource_Misc("FallenTreeChop");
-            Item.NewItem(source, (int)Projectile.Center.X, (int)Projectile.Center.Y, 16, 16, ItemID.Wood, woodAmount);
+            Item.NewItem(source, (int)Projectile.Center.X, (int)Projectile.Center.Y, 16, 16, dropType, amount);
 
             SoundEngine.PlaySound(SoundID.Dig, Projectile.Center);
 
