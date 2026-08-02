@@ -16,7 +16,7 @@ namespace ImapoFallingTrees.Content.Projectiles
 
         private int TreeHeightTiles => (int)Projectile.ai[0];
         private int Direction => (int)Projectile.ai[1];
-        private int DropItemType => (int)Projectile.ai[2]; // Тип выпадающего предмета (Wood, PalmWood и т.д.)
+        private int DropItemType => (int)Projectile.ai[2];
 
         private Phase CurrentPhase
         {
@@ -34,6 +34,14 @@ namespace ImapoFallingTrees.Content.Projectiles
             set => Projectile.localAI[2] = value;
         }
 
+        // Используем Projectile.knockBack для хранения прогресса рубки
+        // (наш снаряд не отбрасывает цели, поэтому поле свободно)
+        private float ChopProgress
+        {
+            get => Projectile.knockBack;
+            set => Projectile.knockBack = value;
+        }
+
         private float Angle;
         private float AngularVelocity;
         private Texture2D treeTexture;
@@ -45,6 +53,7 @@ namespace ImapoFallingTrees.Content.Projectiles
         private const float Gravity = 0.0008f;
         private const float MaxAngle = MathHelper.Pi * 0.9f;
         private const int SupportCheckInterval = 30;
+        private const float RequiredChopDamage = 100f; // Требуемый "урон" для разрубки
 
         private static readonly SoundStyle[] TreeFallSounds = new SoundStyle[]
         {
@@ -69,10 +78,11 @@ namespace ImapoFallingTrees.Content.Projectiles
         {
             Projectile.ai[0] = heightTiles;
             Projectile.ai[1] = direction;
-            Projectile.ai[2] = dropItemType; // Сохраняем тип дропа
+            Projectile.ai[2] = dropItemType;
             CurrentPhase = Phase.Warmup;
             PhaseTimer = 0f;
             ChopCooldown = 0f;
+            ChopProgress = 0f; // Сбрасываем прогресс рубки
             Angle = 0f;
             AngularVelocity = 0f;
             treeTexture = composite;
@@ -406,15 +416,35 @@ namespace ImapoFallingTrees.Content.Projectiles
                     Vector2 closest = Projectile.Center + dir * MathHelper.Clamp(proj, 0f, heightPixels);
                     if (Vector2.Distance(player.Center, closest) < 50f)
                     {
-                        ChopDownedTree(player);
+                        // Добавляем "урон" от топора
+                        ChopProgress += player.HeldItem.axe;
+                        ChopCooldown = 30f; // Кулдаун 0.5 секунды
+
+                        // Визуальная и звуковая обратная связь
+                        SpawnChopParticles(closest);
+                        SoundEngine.PlaySound(SoundID.Dig, Projectile.Center);
+
+                        // Проверяем, достаточно ли ударов
+                        if (ChopProgress >= RequiredChopDamage)
+                        {
+                            ChopDownedTree(player);
+                        }
                     }
                 }
             }
         }
 
+        private void SpawnChopParticles(Vector2 hitPosition)
+        {
+            for (int n = 0; n < 5; n++)
+            {
+                int d = Dust.NewDust(hitPosition - new Vector2(8, 8), 16, 16, DustID.WoodFurniture, 0f, 0f, 100, default, 1f);
+                Main.dust[d].velocity = new Vector2(Main.rand.NextFloat(-2f, 2f), Main.rand.NextFloat(-2f, 0f));
+            }
+        }
+
         private void ChopDownedTree(Player player)
         {
-            // Используем сохранённый тип дропа (Wood для деревьев, PalmWood для пальм)
             int dropType = DropItemType > 0 ? DropItemType : ItemID.Wood;
             int amount = TreeHeightTiles;
 
