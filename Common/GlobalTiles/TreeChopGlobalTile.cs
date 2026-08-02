@@ -14,7 +14,6 @@ namespace ImapoFallingTrees.Common.GlobalTiles
     public class TreeChopGlobalTile : GlobalTile
     {
         // ID тайла ветвей деревьев в ванильной Terraria = 6
-        // Используем числовое значение, так как TileID.TreeBranch отсутствует в API tModLoader 1.4.4.9
         private const ushort TreeBranchTileId = 6;
 
         private static Point16 lastHandledTile = new Point16(-1, -1);
@@ -31,18 +30,35 @@ namespace ImapoFallingTrees.Common.GlobalTiles
 
         private static readonly Dictionary<(int x, int rootY), List<CachedFrame>> cachedColumns = new();
 
+        /// <summary>
+        /// Проверяет, является ли тайл растением, которое должно падать при рубке.
+        /// </summary>
+        private static bool IsFallingPlant(int type)
+        {
+            return type == TileID.Trees || type == TileID.PalmTree;
+        }
+
+        /// <summary>
+        /// Возвращает тип предмета, который выпадает при рубке упавшего растения.
+        /// </summary>
+        private static int GetDropType(int tileType)
+        {
+            if (tileType == TileID.PalmTree) return ItemID.PalmWood;
+            return ItemID.Wood; // обычные деревья
+        }
+
         public override bool CanKillTile(int i, int j, int type, ref bool blockDamaged)
         {
-            if (type == TileID.Trees && !Main.dedServ && !WorldGen.generatingWorld)
+            if (IsFallingPlant(type) && !Main.dedServ && !WorldGen.generatingWorld)
             {
-                CacheColumn(i, j);
+                CacheColumn(i, j, type);
             }
             return true;
         }
 
         public override void KillTile(int i, int j, int type, ref bool fail, ref bool effectOnly, ref bool noItem)
         {
-            if (type != TileID.Trees)
+            if (!IsFallingPlant(type))
                 return;
 
             if (fail || effectOnly)
@@ -57,7 +73,7 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             if (lastHandledTile.X == i && lastHandledTile.Y == j && lastHandledFrame == Main.GameUpdateCount)
                 return;
 
-            List<TrunkFrameData> upperFrames = GetUpperPartFromCacheOrScan(i, j);
+            List<TrunkFrameData> upperFrames = GetUpperPartFromCacheOrScan(i, j, type);
             if (upperFrames.Count == 0)
                 return;
 
@@ -67,11 +83,10 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             isProcessing = true;
             try
             {
-                SpawnFallingTree(i, j, upperFrames);
+                int dropType = GetDropType(type);
+                SpawnFallingTree(i, j, upperFrames, type, dropType);
                 noItem = true;
-                
-                // Удаляем тайлы по их точным координатам Y, игнорируя ветви
-                RemoveAbove(i, j, upperFrames);
+                RemoveAbove(i, j, type, upperFrames);
             }
             catch (Exception)
             {
@@ -79,14 +94,14 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             finally
             {
                 isProcessing = false;
-                cachedColumns.Remove((i, FindRoot(i, j)));
+                cachedColumns.Remove((i, FindRoot(i, j, type)));
             }
         }
 
-        private void CacheColumn(int i, int j)
+        private void CacheColumn(int i, int j, int type)
         {
-            int rootY = FindRoot(i, j);
-            int topY = FindTop(i, j);
+            int rootY = FindRoot(i, j, type);
+            int topY = FindTop(i, j, type);
 
             var list = new List<CachedFrame>();
             for (int y = rootY; y >= topY; y--)
@@ -95,11 +110,11 @@ namespace ImapoFallingTrees.Common.GlobalTiles
                 if (!t.HasTile)
                     break;
 
-                // === ИГНОРИРУЕМ ВЕТВИ (ID = 6) ===
-                if (t.TileType == TreeBranchTileId)
+                // Игнорируем ветви (только для обычных деревьев, у пальм их нет)
+                if (type == TileID.Trees && t.TileType == TreeBranchTileId)
                     continue;
 
-                if (t.TileType != TileID.Trees)
+                if (t.TileType != type)
                     break;
 
                 Color color = t.TileColor > 0 ? WorldGen.paintColor(t.TileColor) : Color.White;
@@ -114,9 +129,9 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             }
         }
 
-        private List<TrunkFrameData> GetUpperPartFromCacheOrScan(int i, int j)
+        private List<TrunkFrameData> GetUpperPartFromCacheOrScan(int i, int j, int type)
         {
-            int rootY = FindRoot(i, j);
+            int rootY = FindRoot(i, j, type);
             if (cachedColumns.TryGetValue((i, rootY), out List<CachedFrame> cached) && cached.Count > 0)
             {
                 var result = new List<TrunkFrameData>();
@@ -124,12 +139,12 @@ namespace ImapoFallingTrees.Common.GlobalTiles
                 {
                     if (f.Y <= j)
                     {
-                        result.Add(new TrunkFrameData 
-                        { 
-                            Y = f.Y, 
-                            FrameX = f.FrameX, 
-                            FrameY = f.FrameY, 
-                            Color = f.Color 
+                        result.Add(new TrunkFrameData
+                        {
+                            Y = f.Y,
+                            FrameX = f.FrameX,
+                            FrameY = f.FrameY,
+                            Color = f.Color
                         });
                     }
                 }
@@ -146,14 +161,13 @@ namespace ImapoFallingTrees.Common.GlobalTiles
                 if (!t.HasTile)
                     break;
 
-                // === ИГНОРИРУЕМ ВЕТВИ ===
-                if (t.TileType == TreeBranchTileId)
+                if (type == TileID.Trees && t.TileType == TreeBranchTileId)
                 {
                     y--;
                     continue;
                 }
 
-                if (t.TileType != TileID.Trees)
+                if (t.TileType != type)
                     break;
 
                 Color color = t.TileColor > 0 ? WorldGen.paintColor(t.TileColor) : Color.White;
@@ -163,28 +177,26 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             return frames;
         }
 
-        private void RemoveAbove(int i, int j, List<TrunkFrameData> upperFrames)
+        private void RemoveAbove(int i, int j, int type, List<TrunkFrameData> upperFrames)
         {
             // Проходим по всем собранным фреймам, начиная с 1 (пропускаем сам тайл j, его удалит ваниль)
             for (int k = 1; k < upperFrames.Count; k++)
             {
-                int y = upperFrames[k].Y; // Берем точную координату Y из кэша
-                
-                if (Main.tile[i, y].HasTile && Main.tile[i, y].TileType == TileID.Trees)
+                int y = upperFrames[k].Y;
+                if (Main.tile[i, y].HasTile && Main.tile[i, y].TileType == type)
                 {
                     WorldGen.KillTile(i, y, fail: false, effectOnly: false, noItem: true);
                 }
             }
         }
 
-        private int FindRoot(int i, int j)
+        private int FindRoot(int i, int j, int type)
         {
             int y = j;
             while (WorldGen.InWorld(i, y + 1))
             {
                 Tile t = Main.tile[i, y + 1];
-                // Ищем корень, учитывая, что по пути могут быть ветви
-                if (t.HasTile && (t.TileType == TileID.Trees || t.TileType == TreeBranchTileId))
+                if (t.HasTile && (t.TileType == type || (type == TileID.Trees && t.TileType == TreeBranchTileId)))
                     y++;
                 else
                     break;
@@ -192,14 +204,13 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             return y;
         }
 
-        private int FindTop(int i, int j)
+        private int FindTop(int i, int j, int type)
         {
             int y = j;
             while (WorldGen.InWorld(i, y - 1))
             {
                 Tile t = Main.tile[i, y - 1];
-                // Ищем верхушку, учитывая, что по пути могут быть ветви
-                if (t.HasTile && (t.TileType == TileID.Trees || t.TileType == TreeBranchTileId))
+                if (t.HasTile && (t.TileType == type || (type == TileID.Trees && t.TileType == TreeBranchTileId)))
                     y--;
                 else
                     break;
@@ -207,19 +218,17 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             return y;
         }
 
-        private void SpawnFallingTree(int i, int j, List<TrunkFrameData> frames)
+        private void SpawnFallingTree(int i, int j, List<TrunkFrameData> frames, int tileType, int dropType)
         {
             int direction = ChooseFallDirectionByWind();
+            Texture2D composite = TreeTextureBuilder.Build(frames, tileType, out int pivotX, out int pivotY);
 
-            // Крона убрана, создаем только чистый слепок ствола
-            Texture2D composite = TreeTextureBuilder.Build(frames, out int pivotX, out int pivotY);
-
-            int type = ModContent.ProjectileType<FallingTreeProjectile>();
-            int proj = Projectile.NewProjectile(null, 0f, 0f, 0f, 0f, type, 0, 0f, Main.myPlayer);
+            int projType = ModContent.ProjectileType<FallingTreeProjectile>();
+            int proj = Projectile.NewProjectile(null, 0f, 0f, 0f, 0f, projType, 0, 0f, Main.myPlayer);
 
             if (Main.projectile[proj].ModProjectile is FallingTreeProjectile ft)
             {
-                ft.Init(frames.Count, direction, composite, pivotX, pivotY);
+                ft.Init(frames.Count, direction, composite, pivotX, pivotY, dropType);
                 Main.projectile[proj].Center = new Vector2(i * 16f + 8f, j * 16f + 16f);
             }
         }
@@ -235,15 +244,16 @@ namespace ImapoFallingTrees.Common.GlobalTiles
     }
 
     /// <summary>
-    /// Строитель текстур создает ТОЛЬКО ствол, без кроны.
-    /// Это гарантирует отсутствие визуальных багов и максимальную стабильность.
+    /// Строитель текстур создает слепок ствола растения.
+    /// Для обычных деревьев и пальм использует соответствующий спрайт-лист.
+    /// Крона не рисуется — только чистый слепок ствола.
     /// </summary>
     public static class TreeTextureBuilder
     {
-        public static Texture2D Build(List<TrunkFrameData> trunkFrames, out int pivotX, out int pivotY)
+        public static Texture2D Build(List<TrunkFrameData> trunkFrames, int tileType, out int pivotX, out int pivotY)
         {
             GraphicsDevice device = Main.instance.GraphicsDevice;
-            Texture2D trunkSheet = TextureAssets.Tile[TileID.Trees].Value;
+            Texture2D sheet = TextureAssets.Tile[tileType].Value;
 
             int width = 16;
             int height = trunkFrames.Count * 16;
@@ -261,10 +271,8 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             {
                 var f = trunkFrames[k];
                 var src = new Rectangle(f.FrameX, f.FrameY, 16, 16);
-                
-                // Рисуем снизу вверх: k=0 (место удара) находится в самом низу текстуры
                 int y = height - (k + 1) * 16;
-                sb.Draw(trunkSheet, new Vector2(0, y), src, f.Color);
+                sb.Draw(sheet, new Vector2(0, y), src, f.Color);
             }
 
             sb.End();
@@ -280,7 +288,7 @@ namespace ImapoFallingTrees.Common.GlobalTiles
 
     public struct TrunkFrameData
     {
-        public int Y;          
+        public int Y;
         public int FrameX;
         public int FrameY;
         public Color Color;
