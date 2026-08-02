@@ -43,12 +43,28 @@ namespace ImapoFallingTrees.Content.Projectiles
         private const float BounceAmplitude = 0.11f;
         private const float Gravity = 0.0008f;
         private const float MaxAngle = MathHelper.Pi * 0.9f;
-        
-        // Интервал проверки опоры в тиках (30 тиков = 0.5 секунды)
         private const int SupportCheckInterval = 30;
+
+        // === МАССИВ ЗВУКОВ ПАДЕНИЯ ДЕРЕВА ===
+        // MaxInstances = 1 предотвращает наложение звуков друг на друга
+        private static readonly SoundStyle[] TreeFallSounds = new SoundStyle[]
+        {
+            new SoundStyle("ImapoFallingTrees/Sounds/TreeFall1") { MaxInstances = 1 },
+            new SoundStyle("ImapoFallingTrees/Sounds/TreeFall2") { MaxInstances = 1 },
+            new SoundStyle("ImapoFallingTrees/Sounds/TreeFall3") { MaxInstances = 1 },
+            new SoundStyle("ImapoFallingTrees/Sounds/TreeFall4") { MaxInstances = 1 },
+            new SoundStyle("ImapoFallingTrees/Sounds/TreeFall5") { MaxInstances = 1 }
+        };
+
+        // Звук удара о землю при приземлении
+        private static readonly SoundStyle TreeImpactSound = new SoundStyle("ImapoFallingTrees/Sounds/TreeImpact") { MaxInstances = 1 };
 
         private readonly HashSet<int> hitPlayers = new HashSet<int>();
         private readonly HashSet<int> hitNPCs = new HashSet<int>();
+
+        // Флаги для предотвращения повторного воспроизведения звука в одной фазе
+        private bool fallSoundPlayed = false;
+        private bool impactSoundPlayed = false;
 
         public override string Texture => "ImapoFallingTrees/Content/Projectiles/FallingTreeProjectile";
 
@@ -64,6 +80,10 @@ namespace ImapoFallingTrees.Content.Projectiles
             treeTexture = composite;
             pivotX = pivotXIn;
             pivotY = pivotYIn;
+            
+            // Сбрасываем флаги звуков при инициализации
+            fallSoundPlayed = false;
+            impactSoundPlayed = false;
         }
 
         public override void SetDefaults()
@@ -110,6 +130,9 @@ namespace ImapoFallingTrees.Content.Projectiles
                 PhaseTimer = 0f;
                 Angle = 0f;
                 AngularVelocity = 0.001f;
+
+                // Запуск звука падения ровно в момент начала анимации
+                PlayRandomFallSound();
             }
         }
 
@@ -188,6 +211,14 @@ namespace ImapoFallingTrees.Content.Projectiles
             restAngle = landedAngle;
             Angle = restAngle;
             Vector2 impactPoint = Projectile.Center + DirectionVector(restAngle) * (TreeHeightTiles * 16);
+            
+            // Запуск звука удара ровно в момент касания земли
+            if (!impactSoundPlayed)
+            {
+                PlayImpactSound();
+                impactSoundPlayed = true;
+            }
+            
             for (int n = 0; n < 12; n++)
             {
                 int d = Dust.NewDust(impactPoint - new Vector2(12, 12), 24, 24, DustID.WoodFurniture, 0f, -2f);
@@ -269,12 +300,9 @@ namespace ImapoFallingTrees.Content.Projectiles
             Projectile.velocity = Vector2.Zero;
         }
 
-        // === МЕТОДЫ ДЛЯ ПЕРЕРАСЧЁТА ОПОРЫ ===
-
         private bool HasSupport(float angle, int heightPixels)
         {
             const int checkPoints = 4;
-            
             for (int i = 1; i <= checkPoints; i++)
             {
                 float dist = heightPixels * (i / (float)checkPoints);
@@ -282,13 +310,10 @@ namespace ImapoFallingTrees.Content.Projectiles
                 int px = (int)(point.X / 16f);
                 int py = (int)(point.Y / 16f);
                 
-                if (!WorldGen.InWorld(px, py))
-                    continue;
-                    
+                if (!WorldGen.InWorld(px, py)) continue;
                 Tile t = Main.tile[px, py];
-                if (!t.HasTile)
-                    continue;
-                    
+                if (!t.HasTile) continue;
+                
                 // Твёрдый блок, другое дерево или ветви (ID 6) — это опора
                 if (Main.tileSolid[t.TileType] || t.TileType == TileID.Trees || t.TileType == 6)
                     return true;
@@ -314,22 +339,62 @@ namespace ImapoFallingTrees.Content.Projectiles
             CurrentPhase = Phase.Falling;
             PhaseTimer = 0f;
             AngularVelocity = 0.001f;
-            
-            // === КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ ===
-            // Продлеваем жизнь проектайла! Иначе он умрёт через 2 тика, 
-            // так как в UpdateLanded мы постоянно ставили timeLeft = 2.
-            Projectile.timeLeft = 3600;
+            Projectile.timeLeft = 3600; // Критически важно: продлеваем жизнь проектайла
 
-            // Очищаем HashSet'ы, чтобы урон наносился заново при новом падении
             hitPlayers.Clear();
             hitNPCs.Clear();
             
-            // Звук треска и частицы при возобновлении падения
-            SoundEngine.PlaySound(SoundID.Dig, Projectile.Center);
+            // Сбрасываем флаги звуков, чтобы они проигрались снова при возобновлении падения
+            fallSoundPlayed = false;
+            impactSoundPlayed = false;
+            
+            // Запускаем звук падения снова
+            PlayRandomFallSound();
+            
             for (int n = 0; n < 8; n++)
             {
                 Dust.NewDust(Projectile.position, Projectile.width, Projectile.height, 
                     DustID.WoodFurniture, 0f, -1f, 100, default, 1f);
+            }
+        }
+
+        // === МЕТОДЫ ДЛЯ ВОСПРОИЗВЕДЕНИЯ ЗВУКОВ ===
+
+        private void PlayRandomFallSound()
+        {
+            if (fallSoundPlayed) return; // Защита от повторного воспроизведения
+            
+            try
+            {
+                int soundIndex = Main.rand.Next(TreeFallSounds.Length);
+                
+                // Регулируем громкость в зависимости от высоты дерева (от 0.5 до 1.0)
+                float volume = MathHelper.Clamp(0.5f + (TreeHeightTiles / 30f), 0.5f, 1.0f);
+                
+                SoundEngine.PlaySound(TreeFallSounds[soundIndex].WithVolumeScale(volume), Projectile.Center);
+                fallSoundPlayed = true;
+            }
+            catch
+            {
+                // Если кастомные файлы не найдены, игра НЕ вылетит и НЕ будет спамить ошибками в консоль.
+                // Просто помечаем, что звук "сыграл", чтобы не пытаться снова.
+                fallSoundPlayed = true;
+            }
+        }
+
+        private void PlayImpactSound()
+        {
+            try
+            {
+                // Громкость удара также зависит от высоты дерева
+                float volume = MathHelper.Clamp(0.6f + (TreeHeightTiles / 25f), 0.6f, 1.0f);
+                
+                SoundEngine.PlaySound(TreeImpactSound.WithVolumeScale(volume), Projectile.Center);
+            }
+            catch
+            {
+                // Безопасный запасной вариант: ванильный звук глухого удара, который работает всегда
+                SoundEngine.PlaySound(SoundID.Item1, Projectile.Center);
             }
         }
 
