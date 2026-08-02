@@ -7,6 +7,8 @@ using Terraria.Audio;
 using Terraria.DataStructures;
 using Terraria.ID;
 using Terraria.ModLoader;
+using ImapoFallingTrees.Common;
+using ImapoFallingTrees.Common.GlobalTiles; // Для доступа к TrunkFrameData
 
 namespace ImapoFallingTrees.Content.Projectiles
 {
@@ -34,13 +36,18 @@ namespace ImapoFallingTrees.Content.Projectiles
             set => Projectile.localAI[2] = value;
         }
 
-        // Используем Projectile.knockBack для хранения прогресса рубки
-        // (наш снаряд не отбрасывает цели, поэтому поле свободно)
         private float ChopProgress
         {
             get => Projectile.knockBack;
             set => Projectile.knockBack = value;
         }
+
+        // Свойства для сохранения состояния в ModSystem
+        public float SavedAngle => Angle;
+        public float SavedChopProgress => ChopProgress;
+
+        // Словарь для временного хранения данных о тайлах до регистрации в ModSystem
+        private static readonly Dictionary<int, List<TrunkFrameData>> SavedFrames = new();
 
         private float Angle;
         private float AngularVelocity;
@@ -53,7 +60,7 @@ namespace ImapoFallingTrees.Content.Projectiles
         private const float Gravity = 0.0008f;
         private const float MaxAngle = MathHelper.Pi * 0.9f;
         private const int SupportCheckInterval = 30;
-        private const float RequiredChopDamage = 100f; // Требуемый "урон" для разрубки
+        private const float RequiredChopDamage = 100f;
 
         private static readonly SoundStyle[] TreeFallSounds = new SoundStyle[]
         {
@@ -82,7 +89,7 @@ namespace ImapoFallingTrees.Content.Projectiles
             CurrentPhase = Phase.Warmup;
             PhaseTimer = 0f;
             ChopCooldown = 0f;
-            ChopProgress = 0f; // Сбрасываем прогресс рубки
+            ChopProgress = 0f;
             Angle = 0f;
             AngularVelocity = 0f;
             treeTexture = composite;
@@ -91,6 +98,42 @@ namespace ImapoFallingTrees.Content.Projectiles
 
             fallSoundPlayed = false;
             impactSoundPlayed = false;
+        }
+
+        // Метод для инициализации из сохраненных данных
+        public void InitFromSave(int heightTiles, int direction, Texture2D composite,
+            int pivotXIn, int pivotYIn, int dropItemType, float savedAngle, float savedChopProgress)
+        {
+            Projectile.ai[0] = heightTiles;
+            Projectile.ai[1] = direction;
+            Projectile.ai[2] = dropItemType;
+            CurrentPhase = Phase.Landed; // Сразу в фазу "упавшее"
+            PhaseTimer = 0f;
+            ChopCooldown = 0f;
+            ChopProgress = savedChopProgress;
+            Angle = savedAngle;
+            AngularVelocity = 0f;
+            treeTexture = composite;
+            pivotX = pivotXIn;
+            pivotY = pivotYIn;
+
+            fallSoundPlayed = true;
+            impactSoundPlayed = true;
+        }
+
+        public static void SaveFrames(int projId, List<TrunkFrameData> frames)
+        {
+            SavedFrames[projId] = frames;
+        }
+
+        public static List<TrunkFrameData> GetFrames(int projId)
+        {
+            return SavedFrames.TryGetValue(projId, out var frames) ? frames : null;
+        }
+
+        public static void RemoveFrames(int projId)
+        {
+            SavedFrames.Remove(projId);
         }
 
         public override void SetDefaults()
@@ -297,6 +340,17 @@ namespace ImapoFallingTrees.Content.Projectiles
             CurrentPhase = Phase.Landed;
             PhaseTimer = 0f;
             Projectile.velocity = Vector2.Zero;
+
+            // Регистрация в ModSystem для сохранения
+            var frames = GetFrames(Projectile.whoAmI);
+            if (frames != null)
+            {
+                int rootX = (int)(Projectile.Center.X / 16f);
+                int rootY = (int)(Projectile.Center.Y / 16f);
+                FallenTreesWorld.RegisterTree(
+                    Projectile.whoAmI, rootX, rootY, Angle, Direction,
+                    DropItemType, 0f, TreeHeightTiles, frames);
+            }
         }
 
         private bool HasSupport(float angle, int heightPixels)
@@ -416,15 +470,12 @@ namespace ImapoFallingTrees.Content.Projectiles
                     Vector2 closest = Projectile.Center + dir * MathHelper.Clamp(proj, 0f, heightPixels);
                     if (Vector2.Distance(player.Center, closest) < 50f)
                     {
-                        // Добавляем "урон" от топора
                         ChopProgress += player.HeldItem.axe;
-                        ChopCooldown = 30f; // Кулдаун 0.5 секунды
+                        ChopCooldown = 30f;
 
-                        // Визуальная и звуковая обратная связь
                         SpawnChopParticles(closest);
                         SoundEngine.PlaySound(SoundID.Dig, Projectile.Center);
 
-                        // Проверяем, достаточно ли ударов
                         if (ChopProgress >= RequiredChopDamage)
                         {
                             ChopDownedTree(player);
@@ -474,6 +525,9 @@ namespace ImapoFallingTrees.Content.Projectiles
         {
             treeTexture?.Dispose();
             treeTexture = null;
+
+            FallenTreesWorld.RemoveTreeByProjectileId(Projectile.whoAmI);
+            RemoveFrames(Projectile.whoAmI);
         }
 
         public override bool PreDraw(ref Color lightColor)
