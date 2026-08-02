@@ -167,10 +167,17 @@ namespace ImapoFallingTrees.Content.Projectiles
 
         private void UpdateWarmup()
         {
+            // === ИСПРАВЛЕНИЕ: Звук играет в самый первый тик раскачивания ===
+            if (PhaseTimer == 0)
+            {
+                PlayRandomFallSound();
+            }
+
             PhaseTimer++;
             float progress = PhaseTimer / WarmupTicks;
             float amplitude = MathHelper.Lerp(0.01f, 0.045f, progress);
             Angle = (float)Math.Sin(PhaseTimer * 0.16f) * amplitude;
+            
             if (PhaseTimer % 20 == 0)
                 Dust.NewDust(Projectile.position, 16, 16, DustID.WoodFurniture, 0f, -1f);
 
@@ -180,7 +187,7 @@ namespace ImapoFallingTrees.Content.Projectiles
                 PhaseTimer = 0f;
                 Angle = 0f;
                 AngularVelocity = 0.001f;
-                PlayRandomFallSound();
+                // PlayRandomFallSound() отсюда удален, чтобы не было задержки
             }
         }
 
