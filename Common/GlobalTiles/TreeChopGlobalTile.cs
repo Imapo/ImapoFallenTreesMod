@@ -13,7 +13,6 @@ namespace ImapoFallingTrees.Common.GlobalTiles
 {
     public class TreeChopGlobalTile : GlobalTile
     {
-        // ID тайла ветвей деревьев в ванильной Terraria = 6
         private const ushort TreeBranchTileId = 6;
 
         private static Point16 lastHandledTile = new Point16(-1, -1);
@@ -30,21 +29,15 @@ namespace ImapoFallingTrees.Common.GlobalTiles
 
         private static readonly Dictionary<(int x, int rootY), List<CachedFrame>> cachedColumns = new();
 
-        /// <summary>
-        /// Проверяет, является ли тайл растением, которое должно падать при рубке.
-        /// </summary>
         private static bool IsFallingPlant(int type)
         {
             return type == TileID.Trees || type == TileID.PalmTree;
         }
 
-        /// <summary>
-        /// Возвращает тип предмета, который выпадает при рубке упавшего растения.
-        /// </summary>
         private static int GetDropType(int tileType)
         {
             if (tileType == TileID.PalmTree) return ItemID.PalmWood;
-            return ItemID.Wood; // обычные деревья
+            return ItemID.Wood;
         }
 
         public override bool CanKillTile(int i, int j, int type, ref bool blockDamaged)
@@ -84,9 +77,16 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             try
             {
                 int dropType = GetDropType(type);
-                SpawnFallingTree(i, j, upperFrames, type, dropType);
+                int projId = SpawnFallingTree(i, j, upperFrames, type, dropType);
                 noItem = true;
                 RemoveAbove(i, j, type, upperFrames);
+                RemoveSideRoots(i, j, type);
+
+                // Сохраняем данные о тайлах для последующей сериализации
+                if (projId >= 0)
+                {
+                    FallingTreeProjectile.SaveFrames(projId, upperFrames);
+                }
             }
             catch (Exception)
             {
@@ -95,6 +95,22 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             {
                 isProcessing = false;
                 cachedColumns.Remove((i, FindRoot(i, j, type)));
+            }
+        }
+
+        private void RemoveSideRoots(int i, int j, int type)
+        {
+            for (int dx = -1; dx <= 1; dx += 2)
+            {
+                int x = i + dx;
+                if (!WorldGen.InWorld(x, j))
+                    continue;
+
+                Tile t = Main.tile[x, j];
+                if (t.HasTile && t.TileType == type)
+                {
+                    WorldGen.KillTile(x, j, fail: false, effectOnly: false, noItem: true);
+                }
             }
         }
 
@@ -110,7 +126,6 @@ namespace ImapoFallingTrees.Common.GlobalTiles
                 if (!t.HasTile)
                     break;
 
-                // Игнорируем ветви (только для обычных деревьев, у пальм их нет)
                 if (type == TileID.Trees && t.TileType == TreeBranchTileId)
                     continue;
 
@@ -152,7 +167,6 @@ namespace ImapoFallingTrees.Common.GlobalTiles
                     return result;
             }
 
-            // Фолбэк: живое сканирование
             var frames = new List<TrunkFrameData>();
             int y = j;
             while (y >= 0)
@@ -179,7 +193,6 @@ namespace ImapoFallingTrees.Common.GlobalTiles
 
         private void RemoveAbove(int i, int j, int type, List<TrunkFrameData> upperFrames)
         {
-            // Проходим по всем собранным фреймам, начиная с 1 (пропускаем сам тайл j, его удалит ваниль)
             for (int k = 1; k < upperFrames.Count; k++)
             {
                 int y = upperFrames[k].Y;
@@ -218,7 +231,7 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             return y;
         }
 
-        private void SpawnFallingTree(int i, int j, List<TrunkFrameData> frames, int tileType, int dropType)
+        private int SpawnFallingTree(int i, int j, List<TrunkFrameData> frames, int tileType, int dropType)
         {
             int direction = ChooseFallDirectionByWind();
             Texture2D composite = TreeTextureBuilder.Build(frames, tileType, out int pivotX, out int pivotY);
@@ -230,7 +243,9 @@ namespace ImapoFallingTrees.Common.GlobalTiles
             {
                 ft.Init(frames.Count, direction, composite, pivotX, pivotY, dropType);
                 Main.projectile[proj].Center = new Vector2(i * 16f + 8f, j * 16f + 16f);
+                return proj;
             }
+            return -1;
         }
 
         private int ChooseFallDirectionByWind()
@@ -243,11 +258,6 @@ namespace ImapoFallingTrees.Common.GlobalTiles
         }
     }
 
-    /// <summary>
-    /// Строитель текстур создает слепок ствола растения.
-    /// Для обычных деревьев и пальм использует соответствующий спрайт-лист.
-    /// Крона не рисуется — только чистый слепок ствола.
-    /// </summary>
     public static class TreeTextureBuilder
     {
         public static Texture2D Build(List<TrunkFrameData> trunkFrames, int tileType, out int pivotX, out int pivotY)
