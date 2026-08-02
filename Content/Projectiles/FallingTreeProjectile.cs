@@ -8,7 +8,7 @@ using Terraria.DataStructures;
 using Terraria.ID;
 using Terraria.ModLoader;
 
-namespace FallingTrees.Content.Projectiles
+namespace ImapoFallingTrees.Content.Projectiles
 {
     public class FallingTreeProjectile : ModProjectile
     {
@@ -41,13 +41,16 @@ namespace FallingTrees.Content.Projectiles
         private const int WarmupTicks = 60;
         private const int BounceTicks = 26;
         private const float BounceAmplitude = 0.11f;
-        private const float Gravity = 0.0008f; // Ускорение падения
-        private const float MaxAngle = MathHelper.Pi * 0.9f; // Максимальный угол (почти перевёрнутое)
+        private const float Gravity = 0.0008f;
+        private const float MaxAngle = MathHelper.Pi * 0.9f;
+        
+        // Интервал проверки опоры в тиках (30 тиков = 0.5 секунды)
+        private const int SupportCheckInterval = 30;
 
         private readonly HashSet<int> hitPlayers = new HashSet<int>();
         private readonly HashSet<int> hitNPCs = new HashSet<int>();
 
-        public override string Texture => "FallingTrees/Content/Projectiles/FallingTreeProjectile";
+        public override string Texture => "ImapoFallingTrees/Content/Projectiles/FallingTreeProjectile";
 
         public void Init(int heightTiles, int direction, Texture2D composite, int pivotXIn, int pivotYIn)
         {
@@ -106,7 +109,7 @@ namespace FallingTrees.Content.Projectiles
                 CurrentPhase = Phase.Falling;
                 PhaseTimer = 0f;
                 Angle = 0f;
-                AngularVelocity = 0.001f; // Начальная скорость падения
+                AngularVelocity = 0.001f;
             }
         }
 
@@ -146,10 +149,6 @@ namespace FallingTrees.Content.Projectiles
             SpawnFallingLeaves(heightPixels);
         }
 
-        /// <summary>
-        /// Проверяет, не упирается ли ствол в землю при угле больше горизонтали.
-        /// Проверяем несколько точек вдоль ствола.
-        /// </summary>
         private bool WouldTrunkHitGround(float angle, int heightPixels)
         {
             const int checkPoints = 5;
@@ -270,10 +269,89 @@ namespace FallingTrees.Content.Projectiles
             Projectile.velocity = Vector2.Zero;
         }
 
+        // === МЕТОДЫ ДЛЯ ПЕРЕРАСЧЁТА ОПОРЫ ===
+
+        private bool HasSupport(float angle, int heightPixels)
+        {
+            const int checkPoints = 4;
+            
+            for (int i = 1; i <= checkPoints; i++)
+            {
+                float dist = heightPixels * (i / (float)checkPoints);
+                Vector2 point = Projectile.Center + DirectionVector(angle) * dist;
+                int px = (int)(point.X / 16f);
+                int py = (int)(point.Y / 16f);
+                
+                if (!WorldGen.InWorld(px, py))
+                    continue;
+                    
+                Tile t = Main.tile[px, py];
+                if (!t.HasTile)
+                    continue;
+                    
+                // Твёрдый блок, другое дерево или ветви (ID 6) — это опора
+                if (Main.tileSolid[t.TileType] || t.TileType == TileID.Trees || t.TileType == 6)
+                    return true;
+            }
+            
+            // Дополнительно проверяем тайл прямо под кончиком дерева
+            Vector2 tip = Projectile.Center + DirectionVector(angle) * heightPixels;
+            int tipX = (int)(tip.X / 16f);
+            int tipY = (int)(tip.Y / 16f) + 1;
+            
+            if (WorldGen.InWorld(tipX, tipY))
+            {
+                Tile below = Main.tile[tipX, tipY];
+                if (below.HasTile && Main.tileSolid[below.TileType])
+                    return true;
+            }
+            
+            return false;
+        }
+
+        private void ResumeFalling()
+        {
+            CurrentPhase = Phase.Falling;
+            PhaseTimer = 0f;
+            AngularVelocity = 0.001f;
+            
+            // === КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ ===
+            // Продлеваем жизнь проектайла! Иначе он умрёт через 2 тика, 
+            // так как в UpdateLanded мы постоянно ставили timeLeft = 2.
+            Projectile.timeLeft = 3600;
+
+            // Очищаем HashSet'ы, чтобы урон наносился заново при новом падении
+            hitPlayers.Clear();
+            hitNPCs.Clear();
+            
+            // Звук треска и частицы при возобновлении падения
+            SoundEngine.PlaySound(SoundID.Dig, Projectile.Center);
+            for (int n = 0; n < 8; n++)
+            {
+                Dust.NewDust(Projectile.position, Projectile.width, Projectile.height, 
+                    DustID.WoodFurniture, 0f, -1f, 100, default, 1f);
+            }
+        }
+
         private void UpdateLanded()
         {
-            Projectile.timeLeft = 2;
+            Projectile.timeLeft = 2; // Бессмертие, пока не срубят или не упадёт дальше
 
+            // Периодически проверяем, есть ли под стволом опора
+            PhaseTimer++;
+            if (PhaseTimer >= SupportCheckInterval)
+            {
+                PhaseTimer = 0f;
+                int heightPixels = TreeHeightTiles * 16;
+                
+                if (!HasSupport(Angle, heightPixels))
+                {
+                    ResumeFalling();
+                    return;
+                }
+            }
+
+            // Проверка рубки упавшего дерева
             Player player = Main.LocalPlayer;
             if (player?.active != true || player.dead)
                 return;
