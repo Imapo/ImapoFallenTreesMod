@@ -1,6 +1,6 @@
-displayName = Falling Trees
-author = You
-version = 3.1
+displayName = Imapo's Falling Trees
+author = Imapo
+version = 0.3
 homepage =
 modReferences =
 weakReferences =
